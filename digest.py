@@ -34,17 +34,21 @@ ABBREV = {
     r'\bDR\.?\b': 'DRIVE',  r'\bPL\.?\b': 'PLACE',    r'\bRD\.?\b': 'ROAD',
     r'\bLN\.?\b': 'LANE',   r'\bCT\.?\b': 'COURT',    r'\bPKWY\.?\b': 'PARKWAY',
     r'\bHWY\.?\b': 'HIGHWAY',r'\bTER\.?\b': 'TERRACE', r'\bCIR\.?\b': 'CIRCLE',
-    r'\b W\.?\b': ' WEST',  r'\b E\.?\b': ' EAST',
-    r'\b N\.?\b': ' NORTH', r'\b S\.?\b': ' SOUTH',
+    r'\bW\b': 'WEST',       r'\bE\b': 'EAST',
+    r'\bN\b': 'NORTH',      r'\bS\b': 'SOUTH',
 }
 
 def normalize(addr):
     if not addr:
         return ""
     s = str(addr).upper().strip()
+    # Remove ordinal suffixes from street numbers: 81ST -> 81, 42ND -> 42, 33RD -> 33, 14TH -> 14
+    s = re.sub(r'(\d+)(ST|ND|RD|TH)\b', r'\1', s)
+    # Expand abbreviations
     for pattern, replacement in ABBREV.items():
         s = re.sub(pattern, replacement, s)
-    s = re.sub(r'[^\w\s]', ' ', s)
+    # Remove punctuation except hyphens (needed for Queens addresses like 41-34)
+    s = re.sub(r'[^\w\s\-]', ' ', s)
     s = re.sub(r'\s+', ' ', s).strip()
     return s
 
@@ -90,23 +94,41 @@ def fetch_feed():
 
 # ── RESOLVE BBL → PLUTO ADDRESS ───────────────────────────────────────────────
 def resolve_bbl(bbl):
-    """Query Infotool to get PLUTO address and building info for a BBL."""
-    try:
-        r = requests.get(f"{INFOTOOL_URL}/api/lookup",
-                         params={"bbl": bbl}, timeout=25)
-        if r.status_code == 200:
-            data = r.json()
-            building = data.get("building_info", {})
-            return {
-                "address": building.get("address", ""),
-                "bldgclass": building.get("bldgclass", ""),
-                "yearbuilt": building.get("yearbuilt", ""),
-                "numfloors": building.get("numfloors", ""),
-                "bldgarea": building.get("bldgarea", ""),
-                "zipcode": building.get("zipcode", ""),
-            }
-    except Exception as e:
-        print(f"  BBL {bbl} lookup error: {e}")
+    """Query Infotool to get PLUTO address and building info for a BBL.
+    For condo units (lot >= 1000), also try the base lot (lot 0001)."""
+    def _lookup(b):
+        try:
+            r = requests.get(f"{INFOTOOL_URL}/api/lookup",
+                             params={"bbl": b}, timeout=25)
+            if r.status_code == 200:
+                data = r.json()
+                building = data.get("building_info", {})
+                if building.get("address"):
+                    return {
+                        "address": building.get("address", ""),
+                        "bldgclass": building.get("bldgclass", ""),
+                        "yearbuilt": building.get("yearbuilt", ""),
+                        "numfloors": building.get("numfloors", ""),
+                        "bldgarea": building.get("bldgarea", ""),
+                        "zipcode": building.get("zipcode", ""),
+                    }
+        except Exception as e:
+            print(f"  BBL {b} lookup error: {e}")
+        return {}
+
+    result = _lookup(bbl)
+    if result:
+        return result
+
+    # If no address, try base lot (for condo units lot >= 1000)
+    if len(bbl) == 10:
+        lot = int(bbl[6:])
+        if lot >= 1000:
+            base_bbl = bbl[:6] + "0001"
+            result = _lookup(base_bbl)
+            if result:
+                return result
+
     return {}
 
 
