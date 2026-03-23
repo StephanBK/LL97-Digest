@@ -14,7 +14,7 @@ import json
 import smtplib
 import requests
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from pathlib import Path
@@ -77,7 +77,7 @@ def load_tracker():
 
 def save_tracker(sent_bbls):
     with open(TRACKER_PATH, "w") as f:
-        json.dump({"sent_bbls": list(sent_bbls), "last_run": datetime.utcnow().isoformat()}, f, indent=2)
+        json.dump({"sent_bbls": list(sent_bbls), "last_run": datetime.now(timezone.utc).isoformat()}, f, indent=2)
 
 
 # ── FETCH WEEKLY FEED ─────────────────────────────────────────────────────────
@@ -430,13 +430,22 @@ def build_email(matched, week_str):
 
 # ── SEND EMAIL ────────────────────────────────────────────────────────────────
 def send_email(subject, html_body):
+    import socket
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"]    = GMAIL_USER
     msg["To"]      = RECIPIENT
     msg.attach(MIMEText(html_body, "html"))
 
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+    # Force IPv4 — Railway sometimes fails on IPv6 for smtp.gmail.com
+    addr_info = socket.getaddrinfo("smtp.gmail.com", 465, socket.AF_INET, socket.SOCK_STREAM)
+    if not addr_info:
+        raise Exception("Could not resolve smtp.gmail.com to IPv4")
+    ipv4_addr = addr_info[0][4][0]
+    print(f"Connecting to smtp.gmail.com via IPv4: {ipv4_addr}")
+
+    with smtplib.SMTP_SSL(ipv4_addr, 465) as server:
+        server.ehlo("localhost")
         server.login(GMAIL_USER, GMAIL_APP_PASS)
         server.sendmail(GMAIL_USER, RECIPIENT, msg.as_string())
     print(f"Email sent to {RECIPIENT}")
@@ -445,7 +454,7 @@ def send_email(subject, html_body):
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 def main():
     print(f"\n{'='*60}")
-    print(f"INOVUES LL97 Digest — {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
+    print(f"INOVUES LL97 Digest — {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
     print(f"{'='*60}")
 
     ll97_lookup = load_ll97()
@@ -455,7 +464,7 @@ def main():
     print(f"\nMatching {len(transactions)} transfers against LL97...")
     matched = match_transactions(transactions, ll97_lookup, sent_bbls)
 
-    week_str = datetime.utcnow().strftime("%b %d, %Y")
+    week_str = datetime.now(timezone.utc).strftime("%b %d, %Y")
     subject, html = build_email(matched, week_str)
 
     print(f"\nFound {len(matched)} matches. Building email...")
